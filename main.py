@@ -3,8 +3,8 @@ import subprocess
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 
-# 🔐 Load credentials from environment (set these in Render’s Dashboard)
-API_ID   = int(os.environ["API_ID"])
+# Load credentials from environment
+API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 
@@ -12,7 +12,7 @@ bot = Client("yt_quality_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_T
 
 @bot.on_message(filters.private & filters.command("start"))
 async def start(client, message):
-    await message.reply("👋 Send me any YouTube or live link, and I'll let you choose quality to download.")
+    await message.reply("👋 Send me a YouTube or Live link, and I'll let you choose quality to download.")
 
 @bot.on_message(filters.private & filters.text & ~filters.command("start"))
 async def get_formats(client, message: Message):
@@ -22,41 +22,50 @@ async def get_formats(client, message: Message):
 
     status = await message.reply("🔍 Fetching available formats…")
     try:
-        # List formats
+        # Run yt-dlp to fetch available formats
         proc = subprocess.run(
             ["yt-dlp", "-F", url],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
         output = proc.stdout
-        # Parse only video formats with code
+
+        # Parse video formats (exclude "audio only" / "video only")
         lines = [
             l for l in output.splitlines()
-            if l[:3].strip().isdigit() and "video only" not in l and "audio only" not in l
+            if l[:3].strip().isdigit() and "only" not in l
         ]
 
-        # Build buttons (limit to first 10)
+        if not lines:
+            return await status.edit_text("❌ No valid formats found.")
+
+        # Build safe inline keyboard
         buttons = []
-        for line in lines[:10]:
+        for line in lines[:10]:  # Limit to first 10 formats
             parts = line.split()
             code = parts[0]
             label = " ".join(parts[1:])
-            buttons.append([InlineKeyboardButton(label, callback_data=f"{code}|{url}")])
+            label = label[:50] + "…" if len(label) > 50 else label  # Limit label length
+            callback_data = f"{code}|{url[:40]}"  # Truncate URL in callback
+            buttons.append([InlineKeyboardButton(label, callback_data=callback_data)])
 
-        await status.edit_text("🎞 Select the quality:", reply_markup=InlineKeyboardMarkup(buttons))
+        await status.edit_text(
+            "🎞 Select the quality to download:",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
 
     except Exception as e:
         await status.edit_text(f"❌ Failed to fetch formats:\n{e}")
 
 @bot.on_callback_query()
-async def download_choice(client, callback_query):
+async def handle_callback(client, callback_query):
     data = callback_query.data
     if "|" not in data:
         return await callback_query.answer("Invalid selection.")
 
     fmt, url = data.split("|", 1)
-    msg = await callback_query.message.edit_text(f"⏬ Downloading in `{fmt}`…")
-    out_file = f"video_{fmt}.mp4"
+    msg = await callback_query.message.edit_text(f"⏬ Downloading in `{fmt}` quality…")
 
+    out_file = f"video_{fmt}.mp4"
     try:
         subprocess.run(
             ["yt-dlp", "-f", fmt, "-o", out_file, url],
